@@ -80,6 +80,7 @@ T = {
     "ask_corridor_offer": {"ru": "🚗 Куда едете?", "ka": "🚗 საით მიდიხართ?", "hy": "🚗 Ուր եք գնում?"},
     "ask_corridor_request": {"ru": "🙋 Куда вам нужно?", "ka": "🙋 საით გჭირდებათ?", "hy": "🙋 Ուր է Ձեզ պետք?"},
     "ask_variant": {"ru": "🛣 Каким путём?", "ka": "🛣 რომელი გზით?", "hy": "🛣 Որ ճանապարհով?"},
+    "ask_direction": {"ru": "↔️ В какую сторону?", "ka": "↔️ რომელი მიმართულებით?", "hy": "↔️ Ո՞ր ուղղությամբ:"},
     "variant_any": {"ru": "Без разницы", "ka": "არ აქვს მნიშვნელობა", "hy": "Կարևոր չէ"},
     "ask_carry_offer": {"ru": "📦 Что можете взять?", "ka": "📦 რისი წაღება შეგიძლიათ?", "hy": "📦 Ի՞նչ կարող եք վերցնել"},
     "ask_carry_request": {"ru": "📦 Что вам нужно?", "ka": "📦 რა გჭირდებათ?", "hy": "📦 Ի՞նչ է Ձեզ պետք"},
@@ -191,6 +192,13 @@ def corridor_name(chat_id, corridor_key):
     return CORRIDOR_NAMES[corridor_key].get(lang) or CORRIDOR_NAMES[corridor_key]["ru"]
 
 
+def direction_label(chat_id, corridor_key, direction_key):
+    city = corridor_name(chat_id, corridor_key)
+    if direction_key == "back":
+        return f"{city} → Ахалкалаки"
+    return f"Ахалкалаки → {city}"
+
+
 def variant_name(chat_id, variant_key):
     lang = get_lang(chat_id)
     return VARIANT_NAMES[variant_key].get(lang) or VARIANT_NAMES[variant_key]["ru"]
@@ -271,6 +279,14 @@ def kb_variant(chat_id, prefix, corridor_key):
     return {"inline_keyboard": buttons}
 
 
+def kb_direction(chat_id, prefix, corridor_key):
+    city = corridor_name(chat_id, corridor_key)
+    return {"inline_keyboard": [
+        [{"text": f"Ахалкалаки → {city}", "callback_data": f"{prefix}_dir_there"}],
+        [{"text": f"{city} → Ахалкалаки", "callback_data": f"{prefix}_dir_back"}],
+    ]}
+
+
 def kb_carry(chat_id, prefix):
     return {"inline_keyboard": [
         [{"text": carry_name(chat_id, key), "callback_data": f"{prefix}_carry_{key}"}] for key in CARRY_KEYS
@@ -313,7 +329,7 @@ def show_open_listings(chat_id):
         if CORRIDORS[l["corridor"]]["variants"] and l.get("variant") and l["variant"] != "any":
             variant_label = variant_name(chat_id, l["variant"])
         text = (
-            f"{icon} <b>#{l['id']} — {corridor_name(chat_id, l['corridor'])}</b>"
+            f"{icon} <b>#{l['id']} — {direction_label(chat_id, l['corridor'], l.get('direction', 'there'))}</b>"
             + (f" ({variant_label})" if variant_label else "") + "\n"
             f"{carry_name(chat_id, l['carry'])}\n"
             + (f"{l['capacity']}\n" if l.get("capacity") else "")
@@ -351,8 +367,11 @@ def ask_next_step(chat_id):
         if variants:
             tg_send(chat_id, t(chat_id, "ask_variant"), reply_markup=kb_variant(chat_id, d["kind"], corridor))
         else:
-            d["step"] = "carry"
+            d["step"] = "direction"
             ask_next_step(chat_id)
+
+    elif d["step"] == "direction":
+        tg_send(chat_id, t(chat_id, "ask_direction"), reply_markup=kb_direction(chat_id, d["kind"], corridor))
 
     elif d["step"] == "carry":
         key = "ask_carry_offer" if d["kind"] == "offer" else "ask_carry_request"
@@ -499,6 +518,7 @@ def publish_listing(chat_id):
         "owner_chat_id": str(chat_id),
         "corridor": corridor,
         "variant": d.get("variant"),
+        "direction": d.get("direction", "there"),
         "carry": d["carry"],
         "capacity": d.get("capacity"),
         "price": d.get("price"),
@@ -512,7 +532,7 @@ def publish_listing(chat_id):
 
     icon = "🚗" if d["kind"] == "offer" else "🙋"
     text = (
-        f"{icon} <b>#{lid} — {corridor_name(chat_id, corridor)}</b>"
+        f"{icon} <b>#{lid} — {direction_label(chat_id, corridor, listing['direction'])}</b>"
         + (f" ({variant_label})" if variant_label else "") + "\n"
         f"{carry_name(chat_id, d['carry'])}\n"
         + (f"{d['capacity']}\n" if d.get("capacity") else "")
@@ -656,7 +676,7 @@ def handle_callback(callback):
         else:
             msg = t(chat_id, "my_listings_header") + "\n━━━━━━━━━━━━━━━━\n"
             for l in mine:
-                msg += f"#{l['id']} | {corridor_name(chat_id, l['corridor'])} | {l['status']}\n"
+                msg += f"#{l['id']} | {direction_label(chat_id, l['corridor'], l.get('direction', 'there'))} | {l['status']}\n"
             tg_send(chat_id, msg)
         answer_callback(callback_id)
     elif data.startswith("offer_corr_") or data.startswith("request_corr_"):
@@ -672,6 +692,14 @@ def handle_callback(callback):
         d = drafts.get(chat_id)
         if d:
             d["variant"] = variant_key
+            d["step"] = "direction"
+            ask_next_step(chat_id)
+        answer_callback(callback_id)
+    elif data.startswith("offer_dir_") or data.startswith("request_dir_"):
+        _, _, direction_key = data.partition("_dir_")
+        d = drafts.get(chat_id)
+        if d:
+            d["direction"] = direction_key
             d["step"] = "carry"
             ask_next_step(chat_id)
         answer_callback(callback_id)
