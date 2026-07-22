@@ -435,6 +435,23 @@ def handle_draft_text(chat_id, text):
     return False
 
 
+def handle_new_members(chat_id, new_members):
+    for member in new_members:
+        if member.get("is_bot"):
+            continue  # не приветствуем сам бот при добавлении/переподключении
+        first_name = member.get("first_name", "").strip() or "👋"
+        text = (
+            f"👋 <b>{first_name}!</b>\n\n"
+            "🇷🇺 Добро пожаловать в Karavan! Здесь можно оставить заявку — уехать/отправить что-то, "
+            "или предложить свои услуги как водитель. Нажмите кнопку ниже — бот всё объяснит в личных сообщениях.\n\n"
+            "🇬🇪 კეთილი იყოს თქვენი მობრძანება Karavan-ში! აქ შეგიძლიათ დატოვოთ განცხადება — წასვლა/გაგზავნა, "
+            "ან შესთავაზოთ თქვენი მომსახურება როგორც მძღოლმა. დააჭირეთ ღილაკს ქვემოთ — ბოტი ყველაფერს აგიხსნით პირად შეტყობინებებში.\n\n"
+            "🇦🇲 Բարի գալուստ Karavan! Այստեղ կարող եք հայտարարություն թողնել՝ գնալ/ուղարկել ինչ-որ բան, "
+            "կամ առաջարկել Ձեր ծառայությունը որպես վարորդ։ Սեղմեք կոճակը ներքևում — բոտը ամեն ինչ կբացատրի անձնական հաղորդագրություններում։"
+        )
+        tg_send(chat_id, text, reply_markup=kb_group_start())
+
+
 def handle_shared_contact(chat_id, contact):
     d = drafts.get(chat_id)
     if not d or d.get("step") != "share_phone":
@@ -681,6 +698,11 @@ def handle_message(message):
     chat_id = str(message["chat"]["id"])
     text = message.get("text", "")
 
+    new_members = message.get("new_chat_members")
+    if new_members:
+        handle_new_members(chat_id, new_members)
+        return
+
     contact = message.get("contact")
     if contact is not None:
         handle_shared_contact(chat_id, contact)
@@ -788,3 +810,4 @@ if __name__ == "__main__":
         set_webhook(server_url)
     log.info(f"Бот запущен на порту {PORT}")
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+
