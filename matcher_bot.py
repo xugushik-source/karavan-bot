@@ -14,6 +14,7 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")      # публичный ч
 PORT = int(os.environ.get("PORT", 8080))
 ACCOUNT_DETAILS = os.environ.get("ACCOUNT_DETAILS", "реквизиты не заданы — добавь ACCOUNT_DETAILS в Railway")
 COMMISSION = os.environ.get("COMMISSION", "10")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "karavan_ge_bot")
 
 ACTIVE_CORRIDORS = ["tbilisi", "yerevan"]
 LANGS = ["ru", "ka", "hy"]
@@ -84,6 +85,12 @@ T = {
     "published": {"ru": "✅ Опубликовано! Как только кто-то откликнется — пришлю контакт.",
                   "ka": "✅ გამოქვეყნდა! როგორც კი ვინმე გამოეხმაურება — გამოგიგზავნით კონტაქტს.",
                   "hy": "✅ Հրապարակված է! Հենց որևէ մեկը արձագանքի — կուղարկեմ կոնտակտը:"},
+    "future_commission_note": {"ru": "💵 Учтите заранее: когда кто-то откликнется, нужно будет заплатить комиссию сервису — {sum} лари, на счёт:\n{account}",
+                                "ka": "💵 გაითვალისწინეთ: როცა ვინმე გამოეხმაურება, საჭირო იქნება საკომისიოს გადახდა — {sum} ლარი, ანგარიშზე:\n{account}",
+                                "hy": "💵 Նախապես նկատի ունեցեք. երբ որևէ մեկը արձագանքի, պետք է վճարեք միջնորդավճար՝ {sum} լարի, հաշվին՝\n{account}"},
+    "disclaimer": {"ru": "⚠️ <b>Важно перед началом:</b>\nKaravan только знакомит людей друг с другом. Мы не несём ответственности за качество услуги, безопасность поездки, утерю вещей или недобросовестность другой стороны. Убедитесь в надёжности собеседника самостоятельно перед тем как договариваться.",
+                    "ka": "⚠️ <b>მნიშვნელოვანია დაწყებამდე:</b>\nKaravan მხოლოდ აკავშირებს ადამიანებს ერთმანეთთან. ჩვენ არ ვიღებთ პასუხისმგებლობას მომსახურების ხარისხზე, მგზავრობის უსაფრთხოებაზე, ნივთის დაკარგვაზე ან მეორე მხარის არაკეთილსინდისიერებაზე. დარწმუნდით მოსაუბრის სანდოობაში დამოუკიდებლად, სანამ შეთანხმდებით.",
+                    "hy": "⚠️ <b>Կարևոր է սկսելուց առաջ.</b>\nKaravan-ը միայն կապակցում է մարդկանց միմյանց հետ։ Մենք պատասխանատվություն չենք կրում ծառայության որակի, ուղևորության անվտանգության, իրերի կորստի կամ մյուս կողմի անազնվության համար։ Համոզվեք զրուցակցի հուսալիությունում ինքնուրույն, նախքան պայմանավորվելը։"},
     "claim_button": {"ru": "✋ Откликнуться", "ka": "✋ გამოხმაურება", "hy": "✋ Արձագանքել"},
     "claim_taken": {"ru": "⚠️ Это уже занято другим человеком — опоздали буквально чуть-чуть.",
                      "ka": "⚠️ ეს უკვე დაკავებულია სხვის მიერ.", "hy": "⚠️ Սա արդեն զբաղված է ուրիշի կողմից:"},
@@ -120,6 +127,7 @@ lock = threading.Lock()
 listings = {}
 users = {}              # chat_id -> {"lang": "ru", "raw": "имя, телефон"}
 drafts = {}
+pending_start_action = {}   # chat_id -> "offer"/"request"/"open", если человек пришёл по ссылке до выбора языка
 listing_counter = [0]
 
 
@@ -258,24 +266,50 @@ def kb_done(chat_id, listing_id):
 
 
 def kb_group_start():
+    base = f"https://t.me/{BOT_USERNAME}?start="
     return {"inline_keyboard": [
-        [{"text": "🚗 Еду / მივდივარ / Գնում եմ", "callback_data": "start_offer"}],
-        [{"text": "🙋 Нужно / მჭირდება / Ինձ պետք է", "callback_data": "start_request"}],
-        [{"text": "📋 Открытые заявки / ღია განცხადებები / Բաց հայտարարություններ", "callback_data": "show_open"}],
+        [{"text": "🚗 Еду / მივდივარ / Գնում եմ", "url": base + "offer"}],
+        [{"text": "🙋 Нужно / მჭირდება / Ինձ պետք է", "url": base + "request"}],
+        [{"text": "📋 Открытые заявки / ღია განცხადებები / Բաց հայտարարություններ", "url": base + "open"}],
     ]}
+
+
+def show_open_listings(chat_id):
+    open_listings = [l for l in listings.values() if l["status"] == "open"]
+    if not open_listings:
+        return tg_send(chat_id, t(chat_id, "no_open_listings"))
+    sent = None
+    for l in open_listings[-20:]:
+        icon = "🚗" if l["kind"] == "offer" else "🙋"
+        variant_label = None
+        if CORRIDORS[l["corridor"]]["variants"] and l.get("variant") and l["variant"] != "any":
+            variant_label = variant_name(chat_id, l["variant"])
+        text = (
+            f"{icon} <b>#{l['id']} — {corridor_name(chat_id, l['corridor'])}</b>"
+            + (f" ({variant_label})" if variant_label else "") + "\n"
+            f"{carry_name(chat_id, l['carry'])}\n"
+            + (f"{l['capacity']}\n" if l.get("capacity") else "")
+            + (f"{l['price']} ₾\n" if l.get("price") else "")
+            + f"🕐 {l.get('time','—')}"
+        )
+        sent = tg_send(chat_id, text, reply_markup=kb_claim(chat_id, l["id"]))
+    return sent
 
 
 # ─── ЧЕРНОВИК ОБЪЯВЛЕНИЯ ────────────────────────────────────────
 def start_offer(chat_id):
+    intro = tg_send(chat_id, t(chat_id, "disclaimer"))
+    tg_send(chat_id, t(chat_id, "future_commission_note", sum=COMMISSION, account=ACCOUNT_DETAILS))
     drafts[chat_id] = {"kind": "offer", "step": "corridor"}
     result = tg_send(chat_id, t(chat_id, "ask_corridor_offer"), reply_markup=kb_corridors(chat_id, "offer"))
-    return bool(result and result.get("ok"))
+    return bool(intro and intro.get("ok")) and bool(result and result.get("ok"))
 
 
 def start_request(chat_id):
+    intro = tg_send(chat_id, t(chat_id, "disclaimer"))
     drafts[chat_id] = {"kind": "request", "step": "corridor"}
     result = tg_send(chat_id, t(chat_id, "ask_corridor_request"), reply_markup=kb_corridors(chat_id, "request"))
-    return bool(result and result.get("ok"))
+    return bool(intro and intro.get("ok")) and bool(result and result.get("ok"))
 
 
 def ask_next_step(chat_id):
@@ -507,7 +541,15 @@ def handle_callback(callback):
         lang = data.split("_", 1)[1]
         users.setdefault(chat_id, {})["lang"] = lang
         save_data()
-        tg_send(chat_id, t(chat_id, "welcome"), reply_markup=kb_main(chat_id))
+        action = pending_start_action.pop(chat_id, None)
+        if action == "offer":
+            start_offer(chat_id)
+        elif action == "request":
+            start_request(chat_id)
+        elif action == "open":
+            show_open_listings(chat_id)
+        else:
+            tg_send(chat_id, t(chat_id, "welcome"), reply_markup=kb_main(chat_id))
         answer_callback(callback_id)
         return
 
@@ -524,24 +566,7 @@ def handle_callback(callback):
         else:
             answer_callback(callback_id, "Откройте @karavan_ge_bot в личке и нажмите Start, затем нажмите кнопку ещё раз", show_alert=True)
     elif data == "show_open":
-        open_listings = [l for l in listings.values() if l["status"] == "open"]
-        if not open_listings:
-            sent = tg_send(chat_id, t(chat_id, "no_open_listings"))
-        else:
-            for l in open_listings[-20:]:
-                icon = "🚗" if l["kind"] == "offer" else "🙋"
-                variant_label = None
-                if CORRIDORS[l["corridor"]]["variants"] and l.get("variant") and l["variant"] != "any":
-                    variant_label = variant_name(chat_id, l["variant"])
-                text = (
-                    f"{icon} <b>#{l['id']} — {corridor_name(chat_id, l['corridor'])}</b>"
-                    + (f" ({variant_label})" if variant_label else "") + "\n"
-                    f"{carry_name(chat_id, l['carry'])}\n"
-                    + (f"{l['capacity']}\n" if l.get("capacity") else "")
-                    + (f"{l['price']} ₾\n" if l.get("price") else "")
-                    + f"🕐 {l.get('time','—')}"
-                )
-                sent = tg_send(chat_id, text, reply_markup=kb_claim(chat_id, l["id"]))
+        sent = show_open_listings(chat_id)
         if sent and sent.get("ok"):
             answer_callback(callback_id)
         else:
@@ -595,9 +620,23 @@ def handle_message(message):
     chat_id = str(message["chat"]["id"])
     text = message.get("text", "")
 
-    if text == "/start":
-        if str(chat_id) not in users or "lang" not in users.get(str(chat_id), {}):
+    if text.startswith("/start"):
+        parts = text.split(maxsplit=1)
+        payload = parts[1].strip() if len(parts) > 1 else None
+        has_lang = str(chat_id) in users and "lang" in users.get(str(chat_id), {})
+
+        if not has_lang:
+            if payload:
+                pending_start_action[chat_id] = payload
             tg_send(chat_id, T["choose_lang"]["ru"] + " / " + T["choose_lang"]["ka"] + " / " + T["choose_lang"]["hy"], reply_markup=kb_lang())
+            return
+
+        if payload == "offer":
+            start_offer(chat_id)
+        elif payload == "request":
+            start_request(chat_id)
+        elif payload == "open":
+            show_open_listings(chat_id)
         else:
             tg_send(chat_id, t(chat_id, "welcome"), reply_markup=kb_main(chat_id))
         return
