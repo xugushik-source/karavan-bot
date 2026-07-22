@@ -15,6 +15,7 @@ PORT = int(os.environ.get("PORT", 8080))
 ACCOUNT_DETAILS = os.environ.get("ACCOUNT_DETAILS", "")  # запасной вариант — просто текст (например, для наличных инструкций)
 ACCOUNT_LINK_TBC = os.environ.get("ACCOUNT_LINK_TBC", "")   # ссылка на оплату через TBC
 ACCOUNT_LINK_BOG = os.environ.get("ACCOUNT_LINK_BOG", "")   # ссылка на оплату через Bank of Georgia
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")              # секретный код в ссылке на страницу статистики
 
 
 def payment_lines():
@@ -625,6 +626,7 @@ def handle_done(listing_id, chat_id):
         return
 
     listing["status"] = "completed"
+    listing["payment_method"] = "transfer"
     save_data()
 
     tg_send(chat_id, t(chat_id, "paid_confirmed"))
@@ -642,6 +644,10 @@ def handle_cash_choice(listing_id, chat_id):
         return
     if str(chat_id) not in (listing["owner_chat_id"], listing["matched_with"]):
         return
+
+    listing["status"] = "completed"
+    listing["payment_method"] = "cash"
+    save_data()
 
     tg_send(chat_id, t(chat_id, "cash_confirmed"))
 
@@ -837,9 +843,76 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/admin":
+            self.handle_admin_page(parsed)
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Karavan bot is running!")
+
+    def handle_admin_page(self, parsed):
+        query = urllib.parse.parse_qs(parsed.query)
+        token = (query.get("token") or [""])[0]
+
+        if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("<h3>Доступ запрещён — неверный или отсутствующий токен.</h3>".encode("utf-8"))
+            return
+
+        all_listings = sorted(listings.values(), key=lambda l: int(l["id"]), reverse=True)
+        total = len(all_listings)
+        open_count = sum(1 for l in all_listings if l["status"] == "open")
+        matched_count = sum(1 for l in all_listings if l["status"] == "matched")
+        completed_count = sum(1 for l in all_listings if l["status"] == "completed")
+        cash_count = sum(1 for l in all_listings if l.get("payment_method") == "cash")
+        transfer_count = sum(1 for l in all_listings if l.get("payment_method") == "transfer")
+
+        rows = ""
+        for l in all_listings:
+            rows += (
+                "<tr>"
+                f"<td>#{l['id']}</td>"
+                f"<td>{l['kind']}</td>"
+                f"<td>{CORRIDOR_NAMES.get(l['corridor'], {}).get('ru', l['corridor'])}"
+                f" ({'обратно' if l.get('direction') == 'back' else 'туда'})</td>"
+                f"<td>{l.get('carry','—')}</td>"
+                f"<td>{l.get('price','—')}</td>"
+                f"<td>{l.get('time','—')}</td>"
+                f"<td>{l['status']}</td>"
+                f"<td>{l.get('payment_method','—')}</td>"
+                f"<td>{l.get('created_at','—')}</td>"
+                "</tr>"
+            )
+
+        html = f"""<html><head><meta charset="utf-8">
+        <title>Karavan — статистика</title>
+        <style>
+            body {{ font-family: sans-serif; padding: 16px; }}
+            table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+            td, th {{ border: 1px solid #ccc; padding: 6px 10px; text-align: left; }}
+            .summary {{ margin-bottom: 20px; }}
+            .summary b {{ display: inline-block; min-width: 160px; }}
+        </style></head><body>
+        <h2>🐫 Karavan — статистика</h2>
+        <div class="summary">
+            <div><b>Всего объявлений:</b> {total}</div>
+            <div><b>Открыто:</b> {open_count} | <b>В матче:</b> {matched_count} | <b>Завершено:</b> {completed_count}</div>
+            <div><b>Оплачено переводом:</b> {transfer_count} | <b>Оплачено наличными:</b> {cash_count}</div>
+            <div><b>Комиссия за сделку:</b> {COMMISSION} лари</div>
+        </div>
+        <table>
+        <tr><th>#</th><th>Тип</th><th>Куда</th><th>Везёт</th><th>Цена</th><th>Время</th><th>Статус</th><th>Оплата</th><th>Создано</th></tr>
+        {rows}
+        </table>
+        </body></html>"""
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
