@@ -95,12 +95,14 @@ T = {
     "claim_claimant_notice": {"ru": "✅ Вы откликнулись на #{id}!\nКонтакт: {contact}\n\nДоговоритесь напрямую о месте встречи и оплате поездки.",
                                "ka": "✅ თქვენ გამოეხმაურეთ #{id}-ს!\nკონტაქტი: {contact}\n\nშეთანხმდით პირდაპირ შეხვედრასა და გადახდაზე.",
                                "hy": "✅ Դուք արձագանքեցիք #{id}-ին!\nԿոնտակտ՝ {contact}\n\nՊայմանավորվեք ուղղակիորեն հանդիպման և վճարման մասին:"},
-    "done_button": {"ru": "✅ Поездка/доставка завершена", "ka": "✅ მგზავრობა/მიწოდება დასრულებულია", "hy": "✅ Ուղևորությունը/առաքումն ավարտված է"},
-    "press_done": {"ru": "Когда поездка/доставка состоится — нажмите:", "ka": "როცა მგზავრობა/მიწოდება დასრულდება — დააჭირეთ:", "hy": "Երբ ուղևորությունը/առաքումն ավարտվի — սեղմեք:"},
-    "commission_msg": {"ru": "💵 Комиссия сервису: {sum} лари\n\nПереводом на счёт:\n{account}\n\nНаличными — по договорённости.",
-                        "ka": "💵 საკომისიო სერვისს: {sum} ლარი\n\nგადარიცხვით ანგარიშზე:\n{account}\n\nნაღდი ფული — შეთანხმებით.",
-                        "hy": "💵 Ծառայության միջնորդավճար՝ {sum} լարի\n\nՓոխանցումով հաշվին՝\n{account}\n\nԿանխիկ՝ պայմանավորվածությամբ:"},
+    "done_button": {"ru": "✅ Комиссию оплатил", "ka": "✅ საკომისიო გადავიხადე", "hy": "✅ Միջնորդավճարը վճարեցի"},
+    "commission_now": {"ru": "💵 Комиссия сервису: {sum} лари\n\nПереводом на счёт:\n{account}\n\nНаличными — по договорённости.\n\nКогда оплатите — нажмите кнопку ниже.",
+                        "ka": "💵 საკომისიო სერვისს: {sum} ლარი\n\nგადარიცხვით ანგარიშზე:\n{account}\n\nნაღდი ფული — შეთანხმებით.\n\nროცა გადაიხდით — დააჭირეთ ღილაკს.",
+                        "hy": "💵 Ծառայության միջնորդավճար՝ {sum} լարի\n\nՓոխանցումով հաշվին՝\n{account}\n\nԿանխիկ՝ պայմանավորվածությամբ.\n\nԵրբ վճարեք՝ սեղմեք կոճակը."},
+    "paid_confirmed": {"ru": "✅ Спасибо, отмечено как оплачено!", "ka": "✅ გმადლობთ, აღინიშნა როგორც გადახდილი!", "hy": "✅ Շնորհակալություն, նշվել է որպես վճարված!"},
     "listing_closed": {"ru": "🔒 Занято — совпадение уже найдено.", "ka": "🔒 დაკავებულია — მატჩი უკვე ნაპოვნია.", "hy": "🔒 Զբաղված է — համընկնում արդեն գտնվել է:"},
+    "btn_show_open": {"ru": "📋 Все открытые заявки", "ka": "📋 ყველა ღია განცხადება", "hy": "📋 Բոլոր բաց հայտարարությունները"},
+    "no_open_listings": {"ru": "Открытых заявок пока нет.", "ka": "ჯერ არ არის ღია განცხადებები.", "hy": "Բաց հայտարարություններ դեռ չկան:"},
     "my_listings_empty": {"ru": "У вас пока нет объявлений.", "ka": "თქვენ ჯერ არ გაქვთ განცხადებები.", "hy": "Դուք դեռ հայտարարություններ չունեք:"},
     "my_listings_header": {"ru": "📋 Ваши объявления:", "ka": "📋 თქვენი განცხადებები:", "hy": "📋 Ձեր հայտարարությունները:"},
     "unknown": {"ru": "Не понял. Нажмите /start, чтобы увидеть меню.", "ka": "ვერ გავიგე. დააჭირეთ /start მენიუს სანახავად.",
@@ -206,6 +208,14 @@ def notify_admin(text):
         tg_send(ADMIN_CHAT_ID, text)  # админ-канал всегда на русском — это твой личный лог
 
 
+def answer_callback(callback_id, text=None, show_alert=False):
+    payload = {"callback_query_id": callback_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = show_alert
+    tg_call("answerCallbackQuery", payload)
+
+
 # ─── КЛАВИАТУРЫ ─────────────────────────────────────────────────
 def kb_lang():
     return {"inline_keyboard": [[{"text": LANG_NAMES[l], "callback_data": f"lang_{l}"}] for l in LANGS]}
@@ -247,15 +257,25 @@ def kb_done(chat_id, listing_id):
     return {"inline_keyboard": [[{"text": t(chat_id, "done_button"), "callback_data": f"done_{listing_id}"}]]}
 
 
+def kb_group_start():
+    return {"inline_keyboard": [
+        [{"text": "🚗 Еду / მივდივარ / Գնում եմ", "callback_data": "start_offer"}],
+        [{"text": "🙋 Нужно / მჭირდება / Ինձ պետք է", "callback_data": "start_request"}],
+        [{"text": "📋 Открытые заявки / ღია განცხადებები / Բաց հայտարարություններ", "callback_data": "show_open"}],
+    ]}
+
+
 # ─── ЧЕРНОВИК ОБЪЯВЛЕНИЯ ────────────────────────────────────────
 def start_offer(chat_id):
     drafts[chat_id] = {"kind": "offer", "step": "corridor"}
-    tg_send(chat_id, t(chat_id, "ask_corridor_offer"), reply_markup=kb_corridors(chat_id, "offer"))
+    result = tg_send(chat_id, t(chat_id, "ask_corridor_offer"), reply_markup=kb_corridors(chat_id, "offer"))
+    return bool(result and result.get("ok"))
 
 
 def start_request(chat_id):
     drafts[chat_id] = {"kind": "request", "step": "corridor"}
-    tg_send(chat_id, t(chat_id, "ask_corridor_request"), reply_markup=kb_corridors(chat_id, "request"))
+    result = tg_send(chat_id, t(chat_id, "ask_corridor_request"), reply_markup=kb_corridors(chat_id, "request"))
+    return bool(result and result.get("ok"))
 
 
 def ask_next_step(chat_id):
@@ -339,6 +359,10 @@ def handle_draft_text(chat_id, text):
     if step == "phone":
         users.setdefault(str(chat_id), {})["raw"] = text.strip()
         save_data()
+        if d.get("kind") == "pending_claim":
+            drafts.pop(chat_id, None)
+            handle_claim(d["listing_id"], chat_id)
+            return True
         d["step"] = "confirm"
         ask_next_step(chat_id)
         return True
@@ -420,6 +444,12 @@ def contact_line(chat_id):
 
 
 def handle_claim(listing_id, claimant_chat_id):
+    # телефон обязателен для отклика — без него человек не может участвовать в матче
+    if not users.get(str(claimant_chat_id), {}).get("raw"):
+        drafts[claimant_chat_id] = {"kind": "pending_claim", "listing_id": listing_id, "step": "phone"}
+        tg_send(claimant_chat_id, t(claimant_chat_id, "ask_phone"))
+        return
+
     listing, error = claim_listing(listing_id, claimant_chat_id)
     if error == "taken":
         tg_send(claimant_chat_id, t(claimant_chat_id, "claim_taken"))
@@ -431,14 +461,14 @@ def handle_claim(listing_id, claimant_chat_id):
         return
 
     owner_id = listing["owner_chat_id"]
+    driver_id = owner_id if listing["kind"] == "offer" else claimant_chat_id
 
     tg_send(owner_id, t(owner_id, "claim_owner_notice", id=listing_id, contact=contact_line(claimant_chat_id)))
-    if listing["kind"] == "offer":
-        tg_send(owner_id, t(owner_id, "press_done"), reply_markup=kb_done(owner_id, listing_id))
-
     tg_send(claimant_chat_id, t(claimant_chat_id, "claim_claimant_notice", id=listing_id, contact=contact_line(owner_id)))
-    if listing["kind"] == "request":
-        tg_send(claimant_chat_id, t(claimant_chat_id, "press_done"), reply_markup=kb_done(claimant_chat_id, listing_id))
+
+    # комиссию просим сразу при матче — у стороны, которая везёт (не у пассажира/отправителя)
+    tg_send(driver_id, t(driver_id, "commission_now", sum=COMMISSION, account=ACCOUNT_DETAILS),
+            reply_markup=kb_done(driver_id, listing_id))
 
     if GROUP_CHAT_ID and listing.get("group_message_id"):
         tg_edit(GROUP_CHAT_ID, listing["group_message_id"], "🔒 —")
@@ -470,19 +500,52 @@ def handle_done(listing_id, chat_id):
 # ─── ОБРАБОТКА CALLBACK ────────────────────────────────────────
 def handle_callback(callback):
     data = callback.get("data", "")
-    chat_id = str(callback["message"]["chat"]["id"])
+    chat_id = str(callback["from"]["id"])  # ID человека, который нажал кнопку — работает и в группе, и в личке
+    callback_id = callback.get("id")
 
     if data.startswith("lang_"):
         lang = data.split("_", 1)[1]
         users.setdefault(chat_id, {})["lang"] = lang
         save_data()
         tg_send(chat_id, t(chat_id, "welcome"), reply_markup=kb_main(chat_id))
+        answer_callback(callback_id)
         return
 
     if data == "start_offer":
-        start_offer(chat_id)
+        ok = start_offer(chat_id)
+        if ok:
+            answer_callback(callback_id)
+        else:
+            answer_callback(callback_id, "Откройте @karavan_ge_bot в личке и нажмите Start, затем нажмите кнопку ещё раз", show_alert=True)
     elif data == "start_request":
-        start_request(chat_id)
+        ok = start_request(chat_id)
+        if ok:
+            answer_callback(callback_id)
+        else:
+            answer_callback(callback_id, "Откройте @karavan_ge_bot в личке и нажмите Start, затем нажмите кнопку ещё раз", show_alert=True)
+    elif data == "show_open":
+        open_listings = [l for l in listings.values() if l["status"] == "open"]
+        if not open_listings:
+            sent = tg_send(chat_id, t(chat_id, "no_open_listings"))
+        else:
+            for l in open_listings[-20:]:
+                icon = "🚗" if l["kind"] == "offer" else "🙋"
+                variant_label = None
+                if CORRIDORS[l["corridor"]]["variants"] and l.get("variant") and l["variant"] != "any":
+                    variant_label = variant_name(chat_id, l["variant"])
+                text = (
+                    f"{icon} <b>#{l['id']} — {corridor_name(chat_id, l['corridor'])}</b>"
+                    + (f" ({variant_label})" if variant_label else "") + "\n"
+                    f"{carry_name(chat_id, l['carry'])}\n"
+                    + (f"{l['capacity']}\n" if l.get("capacity") else "")
+                    + (f"{l['price']} ₾\n" if l.get("price") else "")
+                    + f"🕐 {l.get('time','—')}"
+                )
+                sent = tg_send(chat_id, text, reply_markup=kb_claim(chat_id, l["id"]))
+        if sent and sent.get("ok"):
+            answer_callback(callback_id)
+        else:
+            answer_callback(callback_id, "Откройте @karavan_ge_bot в личке и нажмите Start, затем нажмите кнопку ещё раз", show_alert=True)
     elif data == "my_listings":
         mine = [l for l in listings.values() if l["owner_chat_id"] == chat_id or l.get("matched_with") == chat_id]
         if not mine:
@@ -492,6 +555,7 @@ def handle_callback(callback):
             for l in mine:
                 msg += f"#{l['id']} | {corridor_name(chat_id, l['corridor'])} | {l['status']}\n"
             tg_send(chat_id, msg)
+        answer_callback(callback_id)
     elif data.startswith("offer_corr_") or data.startswith("request_corr_"):
         _, _, corridor_key = data.partition("_corr_")
         d = drafts.get(chat_id)
@@ -499,6 +563,7 @@ def handle_callback(callback):
             d["corridor"] = corridor_key
             d["step"] = "variant"
             ask_next_step(chat_id)
+        answer_callback(callback_id)
     elif data.startswith("offer_var_") or data.startswith("request_var_"):
         _, _, variant_key = data.partition("_var_")
         d = drafts.get(chat_id)
@@ -506,6 +571,7 @@ def handle_callback(callback):
             d["variant"] = variant_key
             d["step"] = "carry"
             ask_next_step(chat_id)
+        answer_callback(callback_id)
     elif data.startswith("offer_carry_") or data.startswith("request_carry_"):
         _, _, carry_key = data.partition("_carry_")
         d = drafts.get(chat_id)
@@ -513,10 +579,15 @@ def handle_callback(callback):
             d["carry"] = carry_key
             d["step"] = "capacity"
             ask_next_step(chat_id)
+        answer_callback(callback_id)
     elif data.startswith("claim_"):
         handle_claim(data.split("_", 1)[1], chat_id)
+        answer_callback(callback_id)
     elif data.startswith("done_"):
         handle_done(data.split("_", 1)[1], chat_id)
+        answer_callback(callback_id)
+    else:
+        answer_callback(callback_id)
 
 
 # ─── ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ──────────────────────────────
@@ -537,6 +608,23 @@ def handle_message(message):
 
     if text == "/myid":
         tg_send(chat_id, f"chat_id: <code>{chat_id}</code>")
+        return
+
+    if text == "/post" and ADMIN_CHAT_ID and chat_id == str(ADMIN_CHAT_ID):
+        if not GROUP_CHAT_ID:
+            tg_send(chat_id, "⚠️ GROUP_CHAT_ID не задан в переменных Railway.")
+            return
+        group_text = (
+            "🐫 <b>Karavan</b>\n\n"
+            "🇷🇺 Хотите поехать/отправить посылку или предложить свои услуги как водитель? Нажмите кнопку ниже — бот проведёт вас через все шаги в личных сообщениях.\n\n"
+            "🇬🇪 გსურთ წასვლა/გზავნილის გაგზავნა თუ მძღოლის მომსახურების შეთავაზება? დააჭირეთ ღილაკს — ბოტი გაგატარებთ ყველა ეტაპზე პირად შეტყობინებებში.\n\n"
+            "🇦🇲 Ցանկանու՞մ եք գնալ/ուղարկել ծանրոց, թե՞ առաջարկել վարորդի ծառայություն։ Սեղմեք կոճակը ներքևում — բոտը կուղեկցի Ձեզ բոլոր քայլերով անձնական հաղորդագրություններում։"
+        )
+        posted = tg_send(GROUP_CHAT_ID, group_text, reply_markup=kb_group_start())
+        if posted and posted.get("ok"):
+            tg_send(chat_id, "✅ Плашка опубликована в группе. Рекомендую закрепить её вручную (зажать сообщение → Закрепить).")
+        else:
+            tg_send(chat_id, "⚠️ Не получилось опубликовать — проверь, что бот всё ещё состоит в группе и GROUP_CHAT_ID верный.")
         return
 
     if handle_draft_text(chat_id, text):
