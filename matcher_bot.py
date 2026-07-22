@@ -94,9 +94,14 @@ T = {
     "ask_time": {"ru": "🕐 Когда? Напишите время или окно (например: 9:00-12:00 или просто 12:00)",
                  "ka": "🕐 როდის? დაწერეთ დრო ან შუალედი (მაგ: 9:00-12:00 ან უბრალოდ 12:00)",
                  "hy": "🕐 Ե՞րբ: Գրեք ժամը կամ միջակայքը (օրինակ՝ 9:00-12:00 կամ պարզապես 12:00)"},
-    "ask_phone": {"ru": "📞 В первый раз — напишите имя и телефон одним сообщением (например: Гиви, 555123456), чтобы после матча вас можно было найти",
-                  "ka": "📞 პირველად — დაწერეთ სახელი და ტელეფონი ერთ შეტყობინებაში (მაგ: გივი, 555123456)",
-                  "hy": "📞 Առաջին անգամ — գրեք անունը և հեռախոսը մեկ հաղորդագրությամբ (օրինակ՝ Գիվի, 555123456)"},
+    "ask_name": {"ru": "Как вас зовут?", "ka": "რა გქვიათ?", "hy": "Ի՞նչ է Ձեր անունը:"},
+    "ask_share_phone": {"ru": "📞 Нажмите кнопку ниже, чтобы поделиться номером телефона — это номер вашего Telegram-аккаунта, Telegram уже проверил его SMS-кодом при регистрации.",
+                         "ka": "📞 დააჭირეთ ღილაკს, რომ გაუზიაროთ ტელეფონის ნომერი — ეს თქვენი Telegram ანგარიშის ნომერია, Telegram-მა უკვე დაადასტურა ის SMS-კოდით რეგისტრაციისას.",
+                         "hy": "📞 Սեղմեք կոճակը՝ հեռախոսահամարը կիսելու համար — սա Ձեր Telegram հաշվի համարն է, Telegram-ն արդեն հաստատել է այն SMS-կոդով գրանցվելիս:"},
+    "btn_share_phone": {"ru": "📞 Поделиться номером", "ka": "📞 ნომრის გაზიარება", "hy": "📞 Կիսվել համարով"},
+    "not_own_contact": {"ru": "⚠️ Это должен быть именно ваш собственный контакт — нажмите кнопку ниже.",
+                         "ka": "⚠️ ეს უნდა იყოს სწორედ თქვენი საკუთარი კონტაქტი — დააჭირეთ ღილაკს ქვემოთ.",
+                         "hy": "⚠️ Սա պետք է լինի հենց Ձեր սեփական կոնտակտը — սեղմեք ստորև կոճակը:"},
     "published": {"ru": "✅ Опубликовано! Как только кто-то откликнется — пришлю контакт.",
                   "ka": "✅ გამოქვეყნდა! როგორც კი ვინმე გამოეხმაურება — გამოგიგზავნით კონტაქტს.",
                   "hy": "✅ Հրապարակված է! Հենց որևէ մեկը արձագանքի — կուղարկեմ կոնտակտը:"},
@@ -140,7 +145,7 @@ DATA_FILE = "data.json"
 lock = threading.Lock()
 
 listings = {}
-users = {}              # chat_id -> {"lang": "ru", "raw": "имя, телефон"}
+users = {}              # chat_id -> {"lang": "ru", "name": "Гиви", "phone": "+995555123456" (подтверждён Telegram)}
 drafts = {}
 pending_start_action = {}   # chat_id -> "offer"/"request"/"open", если человек пришёл по ссылке до выбора языка
 listing_counter = [0]
@@ -280,6 +285,14 @@ def kb_done(chat_id, listing_id):
     return {"inline_keyboard": [[{"text": t(chat_id, "done_button"), "callback_data": f"done_{listing_id}"}]]}
 
 
+def kb_share_phone(chat_id):
+    return {
+        "keyboard": [[{"text": t(chat_id, "btn_share_phone"), "request_contact": True}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+
+
 def kb_group_start():
     base = f"https://t.me/{BOT_USERNAME}?start="
     return {"inline_keyboard": [
@@ -362,8 +375,11 @@ def ask_next_step(chat_id):
     elif d["step"] == "time":
         tg_send(chat_id, t(chat_id, "ask_time"))
 
-    elif d["step"] == "phone":
-        tg_send(chat_id, t(chat_id, "ask_phone"))
+    elif d["step"] == "name":
+        tg_send(chat_id, t(chat_id, "ask_name"))
+
+    elif d["step"] == "share_phone":
+        tg_send(chat_id, t(chat_id, "ask_share_phone"), reply_markup=kb_share_phone(chat_id))
 
     elif d["step"] == "confirm":
         publish_listing(chat_id)
@@ -397,26 +413,55 @@ def handle_draft_text(chat_id, text):
 
     if step == "time":
         d["time"] = text.strip()
-        if str(chat_id) in users and users[str(chat_id)].get("raw"):
+        if str(chat_id) in users and users[str(chat_id)].get("phone"):
             d["step"] = "confirm"
             ask_next_step(chat_id)
         else:
-            d["step"] = "phone"
+            d["step"] = "name"
             ask_next_step(chat_id)
         return True
 
-    if step == "phone":
-        users.setdefault(str(chat_id), {})["raw"] = text.strip()
-        save_data()
-        if d.get("kind") == "pending_claim":
-            drafts.pop(chat_id, None)
-            handle_claim(d["listing_id"], chat_id)
-            return True
-        d["step"] = "confirm"
+    if step == "name":
+        d["pending_name"] = text.strip()
+        d["step"] = "share_phone"
         ask_next_step(chat_id)
         return True
 
+    if step == "share_phone":
+        # человек написал текст вместо того, чтобы нажать кнопку "Поделиться номером"
+        tg_send(chat_id, t(chat_id, "ask_share_phone"), reply_markup=kb_share_phone(chat_id))
+        return True
+
     return False
+
+
+def handle_shared_contact(chat_id, contact):
+    d = drafts.get(chat_id)
+    if not d or d.get("step") != "share_phone":
+        return  # контакт пришёл не там, где ждали — игнорируем
+
+    contact_owner_id = str(contact.get("user_id", ""))
+    if contact_owner_id != str(chat_id):
+        tg_send(chat_id, t(chat_id, "not_own_contact"), reply_markup=kb_share_phone(chat_id))
+        return
+
+    phone = contact.get("phone_number", "")
+    name = d.pop("pending_name", "")
+    users.setdefault(str(chat_id), {})["phone"] = phone
+    if name:
+        users[str(chat_id)]["name"] = name
+    save_data()
+
+    tg_call("sendMessage", {"chat_id": chat_id, "text": "✅", "reply_markup": {"remove_keyboard": True}})
+
+    if d.get("kind") == "pending_claim":
+        listing_id = d["listing_id"]
+        drafts.pop(chat_id, None)
+        handle_claim(listing_id, chat_id)
+        return
+
+    d["step"] = "confirm"
+    ask_next_step(chat_id)
 
 
 def publish_listing(chat_id):
@@ -466,7 +511,7 @@ def publish_listing(chat_id):
             save_data()
 
     tg_send(chat_id, t(chat_id, "published"))
-    notify_admin(f"🆕 Новое объявление #{lid} ({d['kind']}) от {chat_id}\n{text}")
+    notify_admin(f"🆕 Новое объявление #{lid} ({d['kind']}) от {contact_line(chat_id)}\n{text}")
 
 
 # ─── МАТЧИНГ ────────────────────────────────────────────────────
@@ -487,16 +532,17 @@ def claim_listing(listing_id, claimant_chat_id):
 
 def contact_line(chat_id):
     u = users.get(str(chat_id))
-    if u and u.get("raw"):
-        return u["raw"]
+    if u and u.get("phone"):
+        name = u.get("name", "").strip()
+        return f"{name}, {u['phone']}" if name else u["phone"]
     return f"Telegram id {chat_id}"
 
 
 def handle_claim(listing_id, claimant_chat_id):
     # телефон обязателен для отклика — без него человек не может участвовать в матче
-    if not users.get(str(claimant_chat_id), {}).get("raw"):
-        drafts[claimant_chat_id] = {"kind": "pending_claim", "listing_id": listing_id, "step": "phone"}
-        tg_send(claimant_chat_id, t(claimant_chat_id, "ask_phone"))
+    if not users.get(str(claimant_chat_id), {}).get("phone"):
+        drafts[claimant_chat_id] = {"kind": "pending_claim", "listing_id": listing_id, "step": "name"}
+        ask_next_step(claimant_chat_id)
         return
 
     listing, error = claim_listing(listing_id, claimant_chat_id)
@@ -522,7 +568,7 @@ def handle_claim(listing_id, claimant_chat_id):
     if GROUP_CHAT_ID and listing.get("group_message_id"):
         tg_edit(GROUP_CHAT_ID, listing["group_message_id"], "🔒 —")
 
-    notify_admin(f"🤝 Матч по #{listing_id}: {owner_id} ⇄ {claimant_chat_id}")
+    notify_admin(f"🤝 Матч по #{listing_id}: {contact_line(owner_id)} ⇄ {contact_line(claimant_chat_id)}")
 
 
 def handle_done(listing_id, chat_id):
@@ -541,7 +587,7 @@ def handle_done(listing_id, chat_id):
 
     notify_admin(
         f"💰 Сделка #{listing_id} завершена. "
-        f"{listing['owner_chat_id']} ⇄ {listing['matched_with']}. "
+        f"{contact_line(listing['owner_chat_id'])} ⇄ {contact_line(listing['matched_with'])}. "
         f"Комиссия к оплате: {COMMISSION} лари."
     )
 
@@ -634,6 +680,11 @@ def handle_callback(callback):
 def handle_message(message):
     chat_id = str(message["chat"]["id"])
     text = message.get("text", "")
+
+    contact = message.get("contact")
+    if contact is not None:
+        handle_shared_contact(chat_id, contact)
+        return
 
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)
