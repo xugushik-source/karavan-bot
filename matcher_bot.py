@@ -555,54 +555,6 @@ def contact_line(chat_id):
     return f"Telegram id {chat_id}"
 
 
-# ─── СТАТИСТИКА ДЛЯ АДМИНА ──────────────────────────────────────
-def format_admin_stats():
-    total = len(listings)
-    open_count = sum(1 for l in listings.values() if l["status"] == "open")
-    matched_count = sum(1 for l in listings.values() if l["status"] == "matched")
-    completed_count = sum(1 for l in listings.values() if l["status"] == "completed")
-
-    try:
-        commission_val = int(COMMISSION)
-    except ValueError:
-        commission_val = 0
-
-    paid_commission = completed_count * commission_val
-    pending_commission = matched_count * commission_val
-
-    lines = [
-        "📊 <b>Статистика Karavan</b>",
-        "━━━━━━━━━━━━━━━━",
-        f"Всего объявлений: {total}",
-        f"🟢 Открытых: {open_count}",
-        f"🤝 В ожидании оплаты: {matched_count}",
-        f"✅ Завершено (оплачено по самоотчёту): {completed_count}",
-        "━━━━━━━━━━━━━━━━",
-        f"💰 Оплачено (самоотчёт): {paid_commission} лари",
-        f"⏳ Ожидается: {pending_commission} лари",
-    ]
-
-    if listings:
-        lines.append("━━━━━━━━━━━━━━━━")
-        lines.append("Последние сделки:")
-        status_icons = {"open": "🟢", "matched": "🤝", "completed": "✅"}
-        try:
-            recent = sorted(listings.values(), key=lambda l: int(l["id"]), reverse=True)[:10]
-        except (ValueError, TypeError):
-            recent = list(listings.values())[-10:]
-        for l in recent:
-            icon = status_icons.get(l["status"], "❓")
-            corridor_ru = CORRIDOR_NAMES.get(l["corridor"], {}).get("ru", l["corridor"])
-            owner = contact_line(l["owner_chat_id"])
-            matched = contact_line(l["matched_with"]) if l.get("matched_with") else "—"
-            lines.append(f"{icon} #{l['id']} | {corridor_ru} | {owner} ⇄ {matched}")
-    else:
-        lines.append("━━━━━━━━━━━━━━━━")
-        lines.append("Объявлений пока нет.")
-
-    return "\n".join(lines)
-
-
 def handle_claim(listing_id, claimant_chat_id):
     # телефон обязателен для отклика — без него человек не может участвовать в матче
     if not users.get(str(claimant_chat_id), {}).get("phone"):
@@ -648,9 +600,7 @@ def handle_done(listing_id, chat_id):
     listing["status"] = "completed"
     save_data()
 
-    # было: t(chat_id, "commission_msg", ...) — такого ключа не существовало в T,
-    # водителю уходил сломанный текст вместо подтверждения. Исправлено на "paid_confirmed".
-    tg_send(chat_id, t(chat_id, "paid_confirmed"))
+    tg_send(chat_id, t(chat_id, "commission_msg", sum=COMMISSION, account=payment_lines()))
 
     notify_admin(
         f"💰 Сделка #{listing_id} завершена. "
@@ -746,7 +696,20 @@ def handle_callback(callback):
 # ─── ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ──────────────────────────────
 def handle_message(message):
     chat_id = str(message["chat"]["id"])
+    chat_type = message["chat"].get("type", "private")
     text = message.get("text", "")
+
+    new_members = message.get("new_chat_members")
+    if new_members:
+        handle_new_members(chat_id, new_members)
+        return
+
+    if chat_type != "private":
+        # в группе бот реагирует только на служебное /myid — весь личный онбординг
+        # (язык, заполнение объявления и т.д.) не должен идти на виду у всей группы
+        if text == "/myid":
+            tg_send(chat_id, f"chat_id: <code>{chat_id}</code>")
+        return
 
     new_members = message.get("new_chat_members")
     if new_members:
@@ -785,13 +748,6 @@ def handle_message(message):
 
     if text == "/myid":
         tg_send(chat_id, f"chat_id: <code>{chat_id}</code>")
-        return
-
-    if text == "/admin":
-        # молчим для всех, кроме владельца — не подтверждаем и не отрицаем существование команды
-        if not ADMIN_CHAT_ID or chat_id != str(ADMIN_CHAT_ID):
-            return
-        tg_send(chat_id, format_admin_stats())
         return
 
     if text == "/post" and ADMIN_CHAT_ID and chat_id == str(ADMIN_CHAT_ID):
