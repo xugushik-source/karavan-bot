@@ -12,7 +12,22 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")      # приватный чат/канал владельца — сюда падает копия всего (всегда на русском)
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")      # публичный чат/канал, куда публикуются анонимные объявления
 PORT = int(os.environ.get("PORT", 8080))
-ACCOUNT_DETAILS = os.environ.get("ACCOUNT_DETAILS", "реквизиты не заданы — добавь ACCOUNT_DETAILS в Railway")
+ACCOUNT_DETAILS = os.environ.get("ACCOUNT_DETAILS", "")  # запасной вариант — просто текст (например, для наличных инструкций)
+ACCOUNT_LINK_TBC = os.environ.get("ACCOUNT_LINK_TBC", "")   # ссылка на оплату через TBC
+ACCOUNT_LINK_BOG = os.environ.get("ACCOUNT_LINK_BOG", "")   # ссылка на оплату через Bank of Georgia
+
+
+def payment_lines():
+    lines = []
+    if ACCOUNT_LINK_TBC:
+        lines.append(f'💳 <a href="{ACCOUNT_LINK_TBC}">Оплатить через TBC</a>')
+    if ACCOUNT_LINK_BOG:
+        lines.append(f'💳 <a href="{ACCOUNT_LINK_BOG}">Оплатить через Bank of Georgia</a>')
+    if not lines and ACCOUNT_DETAILS:
+        lines.append(ACCOUNT_DETAILS)
+    if not lines:
+        lines.append("реквизиты не заданы — добавь ACCOUNT_LINK_TBC в Railway")
+    return "\n".join(lines)
 COMMISSION = os.environ.get("COMMISSION", "10")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "karavan_ge_bot")
 
@@ -299,7 +314,7 @@ def show_open_listings(chat_id):
 # ─── ЧЕРНОВИК ОБЪЯВЛЕНИЯ ────────────────────────────────────────
 def start_offer(chat_id):
     intro = tg_send(chat_id, t(chat_id, "disclaimer"))
-    tg_send(chat_id, t(chat_id, "future_commission_note", sum=COMMISSION, account=ACCOUNT_DETAILS))
+    tg_send(chat_id, t(chat_id, "future_commission_note", sum=COMMISSION, account=payment_lines()))
     drafts[chat_id] = {"kind": "offer", "step": "corridor"}
     result = tg_send(chat_id, t(chat_id, "ask_corridor_offer"), reply_markup=kb_corridors(chat_id, "offer"))
     return bool(intro and intro.get("ok")) and bool(result and result.get("ok"))
@@ -501,7 +516,7 @@ def handle_claim(listing_id, claimant_chat_id):
     tg_send(claimant_chat_id, t(claimant_chat_id, "claim_claimant_notice", id=listing_id, contact=contact_line(owner_id)))
 
     # комиссию просим сразу при матче — у стороны, которая везёт (не у пассажира/отправителя)
-    tg_send(driver_id, t(driver_id, "commission_now", sum=COMMISSION, account=ACCOUNT_DETAILS),
+    tg_send(driver_id, t(driver_id, "commission_now", sum=COMMISSION, account=payment_lines()),
             reply_markup=kb_done(driver_id, listing_id))
 
     if GROUP_CHAT_ID and listing.get("group_message_id"):
@@ -522,7 +537,7 @@ def handle_done(listing_id, chat_id):
     listing["status"] = "completed"
     save_data()
 
-    tg_send(chat_id, t(chat_id, "commission_msg", sum=COMMISSION, account=ACCOUNT_DETAILS))
+    tg_send(chat_id, t(chat_id, "commission_msg", sum=COMMISSION, account=payment_lines()))
 
     notify_admin(
         f"💰 Сделка #{listing_id} завершена. "
