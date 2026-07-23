@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -16,6 +17,7 @@ ACCOUNT_DETAILS = os.environ.get("ACCOUNT_DETAILS", "")  # запасной ва
 ACCOUNT_LINK_TBC = os.environ.get("ACCOUNT_LINK_TBC", "")   # ссылка на оплату через TBC
 ACCOUNT_LINK_BOG = os.environ.get("ACCOUNT_LINK_BOG", "")   # ссылка на оплату через Bank of Georgia
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")              # секретный код в ссылке на страницу статистики
+EXPIRY_HOURS = float(os.environ.get("EXPIRY_HOURS", "24"))    # через сколько часов неотвеченное объявление закрывается само
 
 
 def payment_lines():
@@ -85,9 +87,12 @@ T = {
     "variant_any": {"ru": "Без разницы", "ka": "არ აქვს მნიშვნელობა", "hy": "Կարևոր չէ"},
     "ask_carry_offer": {"ru": "📦 Что можете взять?", "ka": "📦 რისი წაღება შეგიძლიათ?", "hy": "📦 Ի՞նչ կարող եք վերցնել"},
     "ask_carry_request": {"ru": "📦 Что вам нужно?", "ka": "📦 რა გჭირდებათ?", "hy": "📦 Ի՞նչ է Ձեզ պետք"},
-    "ask_capacity": {"ru": "🔢 Сколько мест/посылок можете взять? Напишите цифрой (например: 2)",
+    "ask_capacity_offer": {"ru": "🔢 Сколько мест/посылок можете взять? Напишите цифрой (например: 2)",
                       "ka": "🔢 რამდენი ადგილი/გზავნილი შეგიძლიათ? დაწერეთ ციფრით (მაგ: 2)",
                       "hy": "🔢 Քանի՞ տեղ/ծանրոց կարող եք վերցնել: Գրեք թվով (օրինակ՝ 2)"},
+    "ask_capacity_request": {"ru": "🔢 Сколько человек едет (или сколько посылок)? Напишите цифрой (например: 2)",
+                      "ka": "🔢 რამდენი ადამიანი მიდის (ან რამდენი გზავნილი)? დაწერეთ ციფრით (მაგ: 2)",
+                      "hy": "🔢 Քանի՞ մարդ է գնում (կամ քանի՞ ծանրոց): Գրեք թվով (օրինակ՝ 2)"},
     "capacity_error": {"ru": "⚠️ Нужна просто цифра, например: 2", "ka": "⚠️ საჭიროა მხოლოდ ციფრი, მაგალითად: 2", "hy": "⚠️ Պետք է միայն թիվ, օրինակ՝ 2"},
     "ask_price": {"ru": "💵 Сколько стоит? Напишите цену в лари (например: 40)",
                   "ka": "💵 რა ღირს? დაწერეთ ფასი ლარში (მაგ: 40)",
@@ -125,6 +130,8 @@ T = {
                                "ka": "✅ თქვენ გამოეხმაურეთ #{id}-ს!\nკონტაქტი: {contact}\n\nშეთანხმდით პირდაპირ შეხვედრასა და გადახდაზე.",
                                "hy": "✅ Դուք արձագանքեցիք #{id}-ին!\nԿոնտակտ՝ {contact}\n\nՊայմանավորվեք ուղղակիորեն հանդիպման և վճարման մասին:"},
     "done_button": {"ru": "✅ Оплатил переводом", "ka": "✅ გადავიხადე გადარიცხვით", "hy": "✅ Վճարեցի փոխանցումով"},
+    "close_button": {"ru": "❌ Закрыть объявление", "ka": "❌ განცხადების დახურვა", "hy": "❌ Փակել հայտարարությունը"},
+    "closed_confirmed": {"ru": "✅ Объявление закрыто.", "ka": "✅ განცხადება დაიხურა.", "hy": "✅ Հայտարարությունը փակված է."},
     "cash_button": {"ru": "💵 Буду платить наличными", "ka": "💵 გადავიხდი ნაღდი ფულით", "hy": "💵 Կվճարեմ կանխիկ"},
     "cash_confirmed": {"ru": "👍 Принято — платите наличными по договорённости. Если передумаете, ссылки на оплату выше всё ещё доступны.",
                         "ka": "👍 მიღებულია — გადაიხადეთ ნაღდი ფულით შეთანხმებით. თუ გადაიფიქრებთ, ზემოთ მოცემული ბმულები კვლავ ხელმისაწვდომია.",
@@ -302,11 +309,15 @@ def kb_claim(chat_id, listing_id):
     return {"inline_keyboard": [[{"text": t(chat_id, "claim_button"), "callback_data": f"claim_{listing_id}"}]]}
 
 
-def kb_done(chat_id, listing_id):
+def kb_done(chat_id, listing_id, claimant_chat_id):
     return {"inline_keyboard": [
-        [{"text": t(chat_id, "done_button"), "callback_data": f"done_{listing_id}"}],
-        [{"text": t(chat_id, "cash_button"), "callback_data": f"cash_{listing_id}"}],
+        [{"text": t(chat_id, "done_button"), "callback_data": f"done_{listing_id}_{claimant_chat_id}"}],
+        [{"text": t(chat_id, "cash_button"), "callback_data": f"cash_{listing_id}_{claimant_chat_id}"}],
     ]}
+
+
+def kb_close(chat_id, listing_id):
+    return {"inline_keyboard": [[{"text": t(chat_id, "close_button"), "callback_data": f"close_{listing_id}"}]]}
 
 
 def kb_share_phone(chat_id):
@@ -332,19 +343,7 @@ def show_open_listings(chat_id):
         return tg_send(chat_id, t(chat_id, "no_open_listings"))
     sent = None
     for l in open_listings[-20:]:
-        icon = "🚗" if l["kind"] == "offer" else "🙋"
-        variant_label = None
-        if CORRIDORS[l["corridor"]]["variants"] and l.get("variant") and l["variant"] != "any":
-            variant_label = variant_name(chat_id, l["variant"])
-        text = (
-            f"{icon} <b>#{l['id']} — {direction_label(chat_id, l['corridor'], l.get('direction', 'there'))}</b>"
-            + (f" ({variant_label})" if variant_label else "") + "\n"
-            f"{carry_name(chat_id, l['carry'])}\n"
-            + (f"{l['capacity']}\n" if l.get("capacity") else "")
-            + (f"{l['price']} ₾\n" if l.get("price") else "")
-            + f"🕐 {l.get('time','—')}"
-        )
-        sent = tg_send(chat_id, text, reply_markup=kb_claim(chat_id, l["id"]))
+        sent = tg_send(chat_id, listing_display_text(chat_id, l), reply_markup=kb_claim(chat_id, l["id"]))
     return sent
 
 
@@ -386,11 +385,7 @@ def ask_next_step(chat_id):
         tg_send(chat_id, t(chat_id, key), reply_markup=kb_carry(chat_id, d["kind"]))
 
     elif d["step"] == "capacity":
-        if d["kind"] == "offer":
-            tg_send(chat_id, t(chat_id, "ask_capacity"))
-        else:
-            d["step"] = "price"
-            ask_next_step(chat_id)
+        tg_send(chat_id, t(chat_id, "ask_capacity_offer" if d["kind"] == "offer" else "ask_capacity_request"))
 
     elif d["step"] == "price":
         if d["kind"] == "offer":
@@ -516,10 +511,8 @@ def publish_listing(chat_id):
     listing_counter[0] += 1
     lid = str(listing_counter[0])
     corridor = d["corridor"]
-    variant_label = None
-    if CORRIDORS[corridor]["variants"] and d.get("variant") and d["variant"] != "any":
-        variant_label = variant_name(chat_id, d["variant"])
 
+    now = datetime.now()
     listing = {
         "id": lid,
         "kind": d["kind"],
@@ -532,22 +525,14 @@ def publish_listing(chat_id):
         "price": d.get("price"),
         "time": d.get("time"),
         "status": "open",
-        "matched_with": None,
-        "created_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "claims": [],  # список: {"chat_id":, "status": "matched"/"completed", "payment_method": None}
+        "created_at": now.strftime("%d.%m.%Y %H:%M"),
+        "created_ts": now.timestamp(),
     }
     listings[lid] = listing
     save_data()
 
-    icon = "🚗" if d["kind"] == "offer" else "🙋"
-    text = (
-        f"{icon} <b>#{lid} — {direction_label(chat_id, corridor, listing['direction'])}</b>"
-        + (f" ({variant_label})" if variant_label else "") + "\n"
-        f"{carry_name(chat_id, d['carry'])}\n"
-        + (f"{d['capacity']}\n" if d.get("capacity") else "")
-        + (f"{d['price']} ₾\n" if d.get("price") else "")
-        + f"🕐 {d.get('time','—')}\n"
-        f"━━━━━━━━━━━━━━━━"
-    )
+    text = listing_display_text(chat_id, listing)
 
     if GROUP_CHAT_ID:
         posted = tg_send(GROUP_CHAT_ID, text, reply_markup=kb_claim(chat_id, lid))
@@ -555,11 +540,41 @@ def publish_listing(chat_id):
             listing["group_message_id"] = posted["result"]["message_id"]
             save_data()
 
-    tg_send(chat_id, t(chat_id, "published"))
+    tg_send(chat_id, t(chat_id, "published"), reply_markup=kb_close(chat_id, lid))
     notify_admin(f"🆕 Новое объявление #{lid} ({d['kind']}) от {contact_line(chat_id)}\n{text}")
 
 
 # ─── МАТЧИНГ ────────────────────────────────────────────────────
+def listing_capacity(listing):
+    # для "request" число людей — просто информация для водителя, запрос закрывается
+    # целиком одним откликом, а не по частям (не может 3 разных водителя разобрать одну группу)
+    if listing["kind"] == "request":
+        return 1
+    return listing.get("capacity") or 1
+
+
+def listing_display_text(chat_id, listing):
+    icon = "🚗" if listing["kind"] == "offer" else "🙋"
+    variant_label = None
+    if CORRIDORS[listing["corridor"]]["variants"] and listing.get("variant") and listing["variant"] != "any":
+        variant_label = variant_name(chat_id, listing["variant"])
+    cap = listing_capacity(listing)
+    filled = len(listing.get("claims", []))
+    fill_line = ""
+    if listing["kind"] == "offer" and (listing.get("capacity") or 1) > 1:
+        fill_line = f"\n📊 Занято: {filled}/{cap}"
+    return (
+        f"{icon} <b>#{listing['id']} — {direction_label(chat_id, listing['corridor'], listing.get('direction', 'there'))}</b>"
+        + (f" ({variant_label})" if variant_label else "") + "\n"
+        f"{carry_name(chat_id, listing['carry'])}\n"
+        + (f"{listing['capacity']}\n" if listing.get("capacity") else "")
+        + (f"{listing['price']} ₾\n" if listing.get("price") else "")
+        + f"🕐 {listing.get('time','—')}"
+        + fill_line + "\n"
+        f"━━━━━━━━━━━━━━━━"
+    )
+
+
 def claim_listing(listing_id, claimant_chat_id):
     with lock:
         listing = listings.get(listing_id)
@@ -569,8 +584,12 @@ def claim_listing(listing_id, claimant_chat_id):
             return None, "taken"
         if listing["owner_chat_id"] == str(claimant_chat_id):
             return None, "own"
-        listing["status"] = "matched"
-        listing["matched_with"] = str(claimant_chat_id)
+        if any(c["chat_id"] == str(claimant_chat_id) for c in listing["claims"]):
+            return None, "already"  # этот же человек уже занял место в этом объявлении
+        cap = listing_capacity(listing)
+        listing["claims"].append({"chat_id": str(claimant_chat_id), "status": "matched", "payment_method": None})
+        if len(listing["claims"]) >= cap:
+            listing["status"] = "full"
         save_data()
         return listing, None
 
@@ -597,65 +616,137 @@ def handle_claim(listing_id, claimant_chat_id):
     if error == "own":
         tg_send(claimant_chat_id, t(claimant_chat_id, "claim_own"))
         return
+    if error == "already":
+        tg_send(claimant_chat_id, t(claimant_chat_id, "claim_taken"))
+        return
     if error:
         return
 
     owner_id = listing["owner_chat_id"]
     driver_id = owner_id if listing["kind"] == "offer" else claimant_chat_id
+    cap = listing_capacity(listing)
+    filled = len(listing["claims"])
 
     tg_send(owner_id, t(owner_id, "claim_owner_notice", id=listing_id, contact=contact_line(claimant_chat_id)))
     tg_send(claimant_chat_id, t(claimant_chat_id, "claim_claimant_notice", id=listing_id, contact=contact_line(owner_id)))
 
     # комиссию просим сразу при матче — у стороны, которая везёт (не у пассажира/отправителя)
+    # для каждого отклика — своя отдельная комиссия и свои кнопки оплаты, привязанные именно к этому человеку
     tg_send(driver_id, t(driver_id, "commission_now", sum=COMMISSION, account=payment_lines()),
-            reply_markup=kb_done(driver_id, listing_id))
+            reply_markup=kb_done(driver_id, listing_id, claimant_chat_id))
 
-    if GROUP_CHAT_ID and listing.get("group_message_id"):
-        tg_edit(GROUP_CHAT_ID, listing["group_message_id"], "🔒 —")
+    if listing["status"] == "full":
+        if GROUP_CHAT_ID and listing.get("group_message_id"):
+            tg_edit(GROUP_CHAT_ID, listing["group_message_id"], listing_display_text(owner_id, listing) + "\n\n🔒 Мест не осталось")
+    else:
+        if GROUP_CHAT_ID and listing.get("group_message_id"):
+            tg_edit(GROUP_CHAT_ID, listing["group_message_id"], listing_display_text(owner_id, listing),
+                    reply_markup=kb_claim(owner_id, listing_id))
+        tg_send(owner_id, f"ℹ️ Занято мест: {filled}/{cap}. Объявление остаётся открытым для остальных.")
 
-    notify_admin(f"🤝 Матч по #{listing_id}: {contact_line(owner_id)} ⇄ {contact_line(claimant_chat_id)}")
+    notify_admin(f"🤝 Матч по #{listing_id} ({filled}/{cap}): {contact_line(owner_id)} ⇄ {contact_line(claimant_chat_id)}")
 
 
-def handle_done(listing_id, chat_id):
+def find_claim(listing, claimant_chat_id):
+    for c in listing.get("claims", []):
+        if c["chat_id"] == str(claimant_chat_id):
+            return c
+    return None
+
+
+def handle_done(listing_id, chat_id, claimant_chat_id):
     listing = listings.get(listing_id)
     if not listing:
         return
-    if str(chat_id) not in (listing["owner_chat_id"], listing["matched_with"]):
+    claim = find_claim(listing, claimant_chat_id)
+    if not claim:
         return
-    if listing["status"] == "completed":
+    if str(chat_id) not in (listing["owner_chat_id"], claimant_chat_id):
+        return
+    if claim["status"] == "completed":
         return
 
-    listing["status"] = "completed"
-    listing["payment_method"] = "transfer"
+    claim["status"] = "completed"
+    claim["payment_method"] = "transfer"
     save_data()
 
     tg_send(chat_id, t(chat_id, "paid_confirmed"))
 
     notify_admin(
         f"💰 Сделка #{listing_id} — оплачено переводом. "
-        f"{contact_line(listing['owner_chat_id'])} ⇄ {contact_line(listing['matched_with'])}. "
+        f"{contact_line(listing['owner_chat_id'])} ⇄ {contact_line(claimant_chat_id)}. "
         f"Комиссия: {COMMISSION} лари."
     )
 
 
-def handle_cash_choice(listing_id, chat_id):
+def handle_cash_choice(listing_id, chat_id, claimant_chat_id):
     listing = listings.get(listing_id)
     if not listing:
         return
-    if str(chat_id) not in (listing["owner_chat_id"], listing["matched_with"]):
+    claim = find_claim(listing, claimant_chat_id)
+    if not claim:
+        return
+    if str(chat_id) not in (listing["owner_chat_id"], claimant_chat_id):
         return
 
-    listing["status"] = "completed"
-    listing["payment_method"] = "cash"
+    claim["status"] = "completed"
+    claim["payment_method"] = "cash"
     save_data()
 
     tg_send(chat_id, t(chat_id, "cash_confirmed"))
 
     notify_admin(
         f"💵 Сделка #{listing_id} — водитель выбрал оплату НАЛИЧНЫМИ. "
-        f"{contact_line(listing['owner_chat_id'])} ⇄ {contact_line(listing['matched_with'])}. "
+        f"{contact_line(listing['owner_chat_id'])} ⇄ {contact_line(claimant_chat_id)}. "
         f"Комиссия к получению: {COMMISSION} лари — договоритесь лично."
     )
+
+
+def expire_stale_listings():
+    now_ts = datetime.now().timestamp()
+    cutoff = EXPIRY_HOURS * 3600
+    for listing in list(listings.values()):
+        if listing["status"] != "open":
+            continue
+        created_ts = listing.get("created_ts")
+        if created_ts is None:
+            continue  # старые объявления без метки времени (созданные до этого обновления) не трогаем
+        if now_ts - created_ts >= cutoff:
+            listing["status"] = "expired"
+            save_data()
+            if GROUP_CHAT_ID and listing.get("group_message_id"):
+                tg_edit(GROUP_CHAT_ID, listing["group_message_id"],
+                        listing_display_text(listing["owner_chat_id"], listing) + "\n\n⏱ Время истекло")
+            notify_admin(f"⏱ Объявление #{listing['id']} автоматически закрыто — истёк срок ({EXPIRY_HOURS} ч.)")
+
+
+def expiry_loop():
+    while True:
+        try:
+            expire_stale_listings()
+        except Exception as e:
+            log.error(f"Ошибка в проверке истечения срока: {e}")
+        time.sleep(600)  # проверяем раз в 10 минут
+
+
+def handle_close_listing(listing_id, chat_id):
+    listing = listings.get(listing_id)
+    if not listing:
+        return
+    if str(chat_id) != listing["owner_chat_id"]:
+        return  # закрыть может только владелец объявления
+    if listing["status"] in ("closed", "full", "expired"):
+        tg_send(chat_id, t(chat_id, "closed_confirmed"))
+        return
+
+    listing["status"] = "closed"
+    save_data()
+
+    tg_send(chat_id, t(chat_id, "closed_confirmed"))
+    if GROUP_CHAT_ID and listing.get("group_message_id"):
+        tg_edit(GROUP_CHAT_ID, listing["group_message_id"], listing_display_text(chat_id, listing) + "\n\n❌ Закрыто автором")
+
+    notify_admin(f"❌ Объявление #{listing_id} закрыто владельцем вручную.")
 
 
 # ─── ОБРАБОТКА CALLBACK ────────────────────────────────────────
@@ -699,7 +790,7 @@ def handle_callback(callback):
         else:
             answer_callback(callback_id, "Откройте @karavan_ge_bot в личке и нажмите Start, затем нажмите кнопку ещё раз", show_alert=True)
     elif data == "my_listings":
-        mine = [l for l in listings.values() if l["owner_chat_id"] == chat_id or l.get("matched_with") == chat_id]
+        mine = [l for l in listings.values() if l["owner_chat_id"] == chat_id or any(c["chat_id"] == chat_id for c in l.get("claims", []))]
         if not mine:
             tg_send(chat_id, t(chat_id, "my_listings_empty"))
         else:
@@ -744,10 +835,15 @@ def handle_callback(callback):
         handle_claim(data.split("_", 1)[1], chat_id)
         answer_callback(callback_id)
     elif data.startswith("done_"):
-        handle_done(data.split("_", 1)[1], chat_id)
+        _, listing_id, claimant_id = data.split("_", 2)
+        handle_done(listing_id, chat_id, claimant_id)
         answer_callback(callback_id)
     elif data.startswith("cash_"):
-        handle_cash_choice(data.split("_", 1)[1], chat_id)
+        _, listing_id, claimant_id = data.split("_", 2)
+        handle_cash_choice(listing_id, chat_id, claimant_id)
+        answer_callback(callback_id)
+    elif data.startswith("close_"):
+        handle_close_listing(data.split("_", 1)[1], chat_id)
         answer_callback(callback_id)
     else:
         answer_callback(callback_id)
@@ -817,11 +913,14 @@ def handle_message(message):
         group_text = (
             "🐫 <b>Karavan</b>\n\n"
             "🇷🇺 Хотите поехать/отправить посылку или предложить свои услуги как водитель? Нажмите кнопку ниже — бот проведёт вас через все шаги в личных сообщениях.\n"
-            "Как это работает: 1) жмёте кнопку → 2) открывается чат с ботом → 3) выбираете язык и отвечаете на вопросы → 4) ваше объявление появляется здесь же в группе.\n\n"
+            "Как это работает: 1) жмёте кнопку → 2) открывается чат с ботом → 3) выбираете язык и отвечаете на вопросы → 4) ваше объявление появляется здесь же в группе.\n"
+            "Если мест несколько — объявление показывает, сколько уже занято (например «2/4»), и остаётся открытым, пока не заполнится или пока автор не закроет его сам. Объявления без откликов закрываются автоматически.\n\n"
             "🇬🇪 გსურთ წასვლა/გზავნილის გაგზავნა თუ მძღოლის მომსახურების შეთავაზება? დააჭირეთ ღილაკს — ბოტი გაგატარებთ ყველა ეტაპზე პირად შეტყობინებებში.\n"
-            "როგორ მუშაობს: 1) დააჭირეთ ღილაკს → 2) იხსნება ჩატი ბოტთან → 3) აირჩიეთ ენა და უპასუხეთ კითხვებს → 4) თქვენი განცხადება გამოჩნდება აქვე, ჯგუფში.\n\n"
+            "როგორ მუშაობს: 1) დააჭირეთ ღილაკს → 2) იხსნება ჩატი ბოტთან → 3) აირჩიეთ ენა და უპასუხეთ კითხვებს → 4) თქვენი განცხადება გამოჩნდება აქვე, ჯგუფში.\n"
+            "თუ რამდენიმე ადგილია — განცხადება აჩვენებს, რამდენია დაკავებული (მაგ. «2/4»), და რჩება ღია, სანამ არ შეივსება ან ავტორი თავად არ დახურავს. პასუხგაუცემელი განცხადებები ავტომატურად იხურება.\n\n"
             "🇦🇲 Ցանկանու՞մ եք գնալ/ուղարկել ծանրոց, թե՞ առաջարկել վարորդի ծառայություն։ Սեղմեք կոճակը ներքևում — բոտը կուղեկցի Ձեզ բոլոր քայլերով անձնական հաղորդագրություններում։\n"
-            "Ինչպես է աշխատում. 1) սեղմեք կոճակը → 2) բացվում է չաթը բոտի հետ → 3) ընտրեք լեզուն և պատասխանեք հարցերին → 4) Ձեր հայտարարությունը կհայտնվի հենց այստեղ, խմբում։"
+            "Ինչպես է աշխատում. 1) սեղմեք կոճակը → 2) բացվում է չաթը բոտի հետ → 3) ընտրեք լեզուն և պատասխանեք հարցերին → 4) Ձեր հայտարարությունը կհայտնվի հենց այստեղ, խմբում։\n"
+            "Եթե մի քանի տեղ կա՝ հայտարարությունը ցույց կտա, թե քանիսն են զբաղված (օրինակ՝ «2/4»), և կմնա բաց, մինչև լրանա կամ հեղինակն ինքը փակի այն։ Չպատասխանված հայտարարությունները փակվում են ավտոմատ։"
         )
         posted = tg_send(GROUP_CHAT_ID, group_text, reply_markup=kb_group_start())
         if posted and posted.get("ok"):
@@ -865,13 +964,18 @@ class Handler(BaseHTTPRequestHandler):
         all_listings = sorted(listings.values(), key=lambda l: int(l["id"]), reverse=True)
         total = len(all_listings)
         open_count = sum(1 for l in all_listings if l["status"] == "open")
-        matched_count = sum(1 for l in all_listings if l["status"] == "matched")
-        completed_count = sum(1 for l in all_listings if l["status"] == "completed")
-        cash_count = sum(1 for l in all_listings if l.get("payment_method") == "cash")
-        transfer_count = sum(1 for l in all_listings if l.get("payment_method") == "transfer")
+        full_count = sum(1 for l in all_listings if l["status"] == "full")
+        all_claims = [c for l in all_listings for c in l.get("claims", [])]
+        total_claims = len(all_claims)
+        completed_claims = sum(1 for c in all_claims if c["status"] == "completed")
+        cash_count = sum(1 for c in all_claims if c.get("payment_method") == "cash")
+        transfer_count = sum(1 for c in all_claims if c.get("payment_method") == "transfer")
 
         rows = ""
         for l in all_listings:
+            cap = l.get("capacity") or 1
+            filled = len(l.get("claims", []))
+            done_in_listing = sum(1 for c in l.get("claims", []) if c["status"] == "completed")
             rows += (
                 "<tr>"
                 f"<td>#{l['id']}</td>"
@@ -882,7 +986,7 @@ class Handler(BaseHTTPRequestHandler):
                 f"<td>{l.get('price','—')}</td>"
                 f"<td>{l.get('time','—')}</td>"
                 f"<td>{l['status']}</td>"
-                f"<td>{l.get('payment_method','—')}</td>"
+                f"<td>{filled}/{cap} (оплачено: {done_in_listing})</td>"
                 f"<td>{l.get('created_at','—')}</td>"
                 "</tr>"
             )
@@ -899,7 +1003,8 @@ class Handler(BaseHTTPRequestHandler):
         <h2>🐫 Karavan — статистика</h2>
         <div class="summary">
             <div><b>Всего объявлений:</b> {total}</div>
-            <div><b>Открыто:</b> {open_count} | <b>В матче:</b> {matched_count} | <b>Завершено:</b> {completed_count}</div>
+            <div><b>Открыто:</b> {open_count} | <b>Заполнено полностью:</b> {full_count}</div>
+            <div><b>Всего откликов (сделок):</b> {total_claims} | <b>Оплачено:</b> {completed_claims}</div>
             <div><b>Оплачено переводом:</b> {transfer_count} | <b>Оплачено наличными:</b> {cash_count}</div>
             <div><b>Комиссия за сделку:</b> {COMMISSION} лари</div>
         </div>
@@ -951,5 +1056,6 @@ if __name__ == "__main__":
     server_url = os.environ.get("SERVER_URL", "")
     if server_url and BOT_TOKEN:
         set_webhook(server_url)
+    threading.Thread(target=expiry_loop, daemon=True).start()
     log.info(f"Бот запущен на порту {PORT}")
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
